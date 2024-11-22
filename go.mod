@@ -1,9 +1,8 @@
-module f5.com/ha
+module github.com/tamaricoh/F5_home_assignment
 
-go 1.21.10
+go 1.23.3
 
-require github.com/dgrijalva/jwt-go v3.2.0+incompatible
-
-require golang.org/x/crypto v0.29.0
-
-require github.com/gorilla/mux v1.8.1 
+require (
+	github.com/dgrijalva/jwt-go v3.2.0+incompatible
+	golang.org/x/crypto v0.29.0
+)

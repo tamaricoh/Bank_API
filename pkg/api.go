@@ -31,6 +31,8 @@ type Claims struct {
 4. Rate Limiting                     | ? |
 6. Hash the passwords                | v |
 7. Make the search more efficient    | v |
+8. SQL injection                     |   |
+9. Make sure to save this token for future requests    |   |
 */
 
 /*
@@ -100,6 +102,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		1. Make the Username unique            | v |
 		2. Hash the passwords                  | v |
 		3. Exclude Password in Response        | v |
+		4. check if username != "" -------------------------------
 	*/
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
