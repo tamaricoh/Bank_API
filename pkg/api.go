@@ -5,11 +5,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"golang.org/x/crypto/bcrypt"
 )
+
+var accountMutex sync.Mutex 
 
 var jwtKey = []byte("my_secret_key")
 
@@ -21,14 +24,76 @@ type Claims struct {
 }
 
 /*
-1. JWT Key Management        |   |
-2. Add input validation      |   | >>> buffer overun -- הגבלה על אורך יוזרניים וסיסמא וכל אינפוט מהמשתמש
-3. No HTTP Status Codes      |   |
-4. ID Generation is simple, but accounts or users cannot be deleted. >>> לכתוב ברידמי
-5. No Rate Limiting
-6. Hash the passwords?       | v |
-7. Make the search more efficient
+1. JWT Key Management                |   |
+2. Add input validation              | + | 
+>>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
+3. HTTP Status Codes                 | v |
+4. Rate Limiting                     | ? |
+6. Hash the passwords                | v |
+7. Make the search more efficient    | v |
 */
+
+/*
+README:
+1. ID Generation is simple, but accounts or users cannot be deleted.
+2. Improve the locking mechanism so that a lock by one user does not block other users.
+*/
+
+// Rate limiter ----------------------------------------------------------
+var rateLimitMutex sync.Mutex
+
+// Structure to store rate limit data for users
+type RateLimiter struct {
+	// Store user request counts and timestamps
+	UserRequests map[string]int
+	Timestamps   map[string]time.Time
+}
+
+// Global RateLimiter instance
+var rateLimiter = &RateLimiter{
+	UserRequests: make(map[string]int),
+	Timestamps:   make(map[string]time.Time),
+}
+
+// Max requests allowed per minute
+const maxRequestsPerMinute = 100
+
+func RateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rateLimitMutex.Lock()
+		defer rateLimitMutex.Unlock()
+
+		// Get user IP or identifier (You can use other identifiers like username or token for rate limiting)
+		userID := r.RemoteAddr
+
+		// Check if the timestamp for the user exists and is still valid (within the last minute)
+		if lastRequestTime, exists := rateLimiter.Timestamps[userID]; exists {
+			// If within the last minute, check the request count
+			if time.Since(lastRequestTime) < time.Minute {
+				// Check if the user exceeded the rate limit
+				if rateLimiter.UserRequests[userID] >= maxRequestsPerMinute {
+					http.Error(w, "Too many requests. Please try again later.", http.StatusTooManyRequests)
+					return
+				}
+			} else {
+				// Reset the rate limit count after a minute
+				rateLimiter.UserRequests[userID] = 0
+				rateLimiter.Timestamps[userID] = time.Now()
+			}
+		} else {
+			// If it's the user's first request, initialize the counters
+			rateLimiter.UserRequests[userID] = 0
+			rateLimiter.Timestamps[userID] = time.Now()
+		}
+
+		// Increment the request count for the user
+		rateLimiter.UserRequests[userID]++
+
+		// Pass the request to the next handler
+		next.ServeHTTP(w, r)
+	})
+}
+// Rate limiter ----------------------------------------------------------
 
 func Register(w http.ResponseWriter, r *http.Request) {
 	/*
@@ -48,11 +113,17 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Part 1: Check if username is unique
-	for _, existingUser := range users {
+	userExists := false
+	for _, existingUser := range userMap {
 		if existingUser.Username == user.Username {
-			http.Error(w, "Username already exists", http.StatusConflict)
-			return
+			userExists = true
+			break
 		}
+	}
+	
+	if userExists {
+		http.Error(w, "Username already exists", http.StatusConflict)
+		return
 	}
 
 	// Part 2: Hash the password
@@ -63,9 +134,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 	user.Password = string(hashedPassword)
 
-	// Add user to the list
-	user.ID = len(users) + 1
-	users = append(users, user)
+	user.ID = len(userMap) + 1 // Assuming the IDs are sequential, you can compute it from the map size.
+	userMap[user.ID] = user
 
 	// Part 3: Exclude the password from the response
 	responseUser := struct {
@@ -97,15 +167,17 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// Authenticate user
 	var authenticatedUser *User
-	for _, user := range users {
+	for _, user := range userMap {
 		if user.Username == creds.Username {
-			// Part 1: Remove the direct Password comparison
+			// Part 1:
 			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err == nil {
 				authenticatedUser = &user
 				break
 			}
 		}
 	}
+
+	// If user doesn't exist or password is incorrect
 	if authenticatedUser == nil {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
@@ -125,7 +197,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+
 	json.NewEncoder(w).Encode(map[string]string{"token": tokenString})
+
 }
 
 func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -157,8 +231,8 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
 	1. Authorization check                    | v |
-	2. Error Handling for Invalid Data        | v | --------------------------------------------
-	3. Check if account already exists        | v |  ????????
+	2. Error Handling for Invalid Data        | v |
+	3. Check if account already exists        | v |
 	*/
 
 	// Part 1:
@@ -166,54 +240,64 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
+
 	var acc Account
 	if err := json.NewDecoder(r.Body).Decode(&acc); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// // Part 2:
-	// if acc.UserID <= 0 {
-	// 	http.Error(w, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
-	// 	return
-	// }
-	// if acc.CreatedAt.IsZero() { // sanity about time - not created in the future
-	// 	http.Error(w, "Invalid CreatedAt: timestamp cannot be empty", http.StatusBadRequest)
-	// 	return
-	// }
 
-	// Part 3:
-	for _, existingAccount := range accounts {
-		if existingAccount.UserID == acc.UserID {
-			http.Error(w, "Account already exists for this UserID", http.StatusConflict)
-			return
-		}
+	// Part 2:
+	if acc.UserID <= 0 {
+		http.Error(w, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
+		return
 	}
 
-	acc.ID = len(accounts) + 1
+	// Part 3:
+	if _, exists := accountMap[acc.UserID]; exists {
+		http.Error(w, "Account already exists for this UserID", http.StatusConflict)
+		return
+	}
+
+	acc.ID = len(accountMap) + 1
 	acc.CreatedAt = time.Now()
-	accounts = append(accounts, acc)
-	json.NewEncoder(w).Encode(acc)
+	accountMap[acc.ID] = acc
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(acc)   
 }
 
 func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
-	1. Authorization check                  | v |
-	2. Error Handling for Empty accounts    | v |
-	3. r *http.Request ?????????????????? -- must be get!!!!
+	1. Ensure the HTTP method is GET          | v |
+ 	2. Authorization check                    | v |
+	3. Error Handling for Empty accounts      | v |
 	*/
 
 	// Part 1:
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Part 2:
 	if claims.Role != "admin" {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
-	// Part 2:
-	if len(accounts) == 0 {
+	// Part 3:
+	if len(accountMap) == 0 {
 		http.Error(w, "No accounts found", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(accounts)
+	var allAccounts []Account
+	for _, acc := range accountMap {
+    	allAccounts = append(allAccounts, acc)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(allAccounts)
 }
 
 func BalanceHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -253,20 +337,18 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
-	for _, acc := range accounts {
-		if acc.UserID == uid {
-			json.NewEncoder(w).Encode(map[string]float64{"balance": acc.Balance})
-			return
-		}
+	if acc, exists := accountMap[uid]; exists {
+		json.NewEncoder(w).Encode(map[string]float64{"balance": acc.Balance})
+		return
 	}
 	http.Error(w, "Account not found", http.StatusNotFound)
 }
 
 func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
-	1. Authorization check              | v |
-	2. Validation for Deposit Amount    | v |
-	3. Lock objects to make synchronization ???? ------------------------------
+	1. Authorization check                    | v |
+	2. Validation for Deposit Amount          | v |
+	3. Lock objects to make synchronization   | v |
 	*/
 	var body struct {
 		UserID int     `json:"user_id"`
@@ -289,21 +371,25 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	for i, acc := range accounts {
-		if acc.UserID == body.UserID {
-			accounts[i].Balance += body.Amount
-			json.NewEncoder(w).Encode(accounts[i])
-			return
-		}
+
+	// Part 3:
+	accountMutex.Lock()
+	defer accountMutex.Unlock()
+
+	if acc, exists := accountMap[body.UserID]; exists {
+		acc.Balance += body.Amount
+		accountMap[body.UserID] = acc  // Update the account in the map
+		json.NewEncoder(w).Encode(acc) // Return the updated account
+		return
 	}
 	http.Error(w, "Account not found", http.StatusNotFound)
 }
 
 func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
-	1. Authorization check                 | v |
-	2. Validation for Withdrawal Amount    | v |
-	3. Lock objects to make synchronization ????
+	1. Authorization check                      | v |
+	2. Validation for Withdrawal Amount         | v |
+	3. Lock objects to make synchronization     | v |
 	*/
 	var body struct {
 		UserID int     `json:"user_id"`
@@ -326,18 +412,23 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	for i, acc := range accounts {
-		if acc.UserID == body.UserID {
-			if acc.Balance < body.Amount {
-				http.Error(w, ErrInsufficientFunds.Error(), http.StatusBadRequest)
-				return
-			}
-			accounts[i].Balance -= body.Amount
-			json.NewEncoder(w).Encode(accounts[i])
+
+	// Part 3:
+	accountMutex.Lock()
+	defer accountMutex.Unlock()
+
+	if acc, exists := accountMap[body.UserID]; exists {
+		if acc.Balance < body.Amount {
+			http.Error(w, ErrInsufficientFunds.Error(), http.StatusBadRequest)
 			return
 		}
+		acc.Balance -= body.Amount
+		accountMap[body.UserID] = acc // Update the account in the map
+		json.NewEncoder(w).Encode(acc) // Return the updated account
+		return
 	}
 	http.Error(w, "Account not found", http.StatusNotFound)
+	
 }
 
 func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFunc {

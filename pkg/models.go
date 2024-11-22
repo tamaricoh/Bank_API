@@ -19,8 +19,10 @@ type Account struct {
 	CreatedAt time.Time
 }
 
-var users []User
-var accounts []Account
+// var users []User
+// var accounts []Account
+var userMap = make(map[int]User)
+var accountMap = make(map[int]Account)
 
 var (
 	ErrUserNotFound      = errors.New("user not found")
