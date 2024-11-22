@@ -22,11 +22,11 @@ type Claims struct {
 
 /*
 1. JWT Key Management        |   |
-2. Add input validation      |   |
+2. Add input validation      |   | >>> buffer overun -- הגבלה על אורך יוזרניים וסיסמא וכל אינפוט מהמשתמש
 3. No HTTP Status Codes      |   |
-4. ID Generation is simple, but accounts or users cannot be deleted.
+4. ID Generation is simple, but accounts or users cannot be deleted. >>> לכתוב ברידמי
 5. No Rate Limiting
-6. Hash the passwords?
+6. Hash the passwords?       | v |
 7. Make the search more efficient
 */
 
@@ -85,7 +85,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	/*
 	1. Remove the direct Password comparison        | v |
 	*/
-	if r.Method != http.MethodPost { // check if the request method is POST
+	if r.Method != http.MethodPost { 
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -157,7 +157,7 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
 	1. Authorization check                    | v |
-	2. Error Handling for Invalid Data        | v |
+	2. Error Handling for Invalid Data        | v | --------------------------------------------
 	3. Check if account already exists        | v |  ????????
 	*/
 
@@ -171,15 +171,15 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Part 2:
-	if acc.UserID <= 0 {
-		http.Error(w, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
-		return
-	}
-	if acc.CreatedAt.IsZero() {
-		http.Error(w, "Invalid CreatedAt: timestamp cannot be empty", http.StatusBadRequest)
-		return
-	}
+	// // Part 2:
+	// if acc.UserID <= 0 {
+	// 	http.Error(w, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
+	// 	return
+	// }
+	// if acc.CreatedAt.IsZero() { // sanity about time - not created in the future
+	// 	http.Error(w, "Invalid CreatedAt: timestamp cannot be empty", http.StatusBadRequest)
+	// 	return
+	// }
 
 	// Part 3:
 	for _, existingAccount := range accounts {
@@ -199,7 +199,7 @@ func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
 	1. Authorization check                  | v |
 	2. Error Handling for Empty accounts    | v |
-	3. r *http.Request ??????????????????
+	3. r *http.Request ?????????????????? -- must be get!!!!
 	*/
 
 	// Part 1:
@@ -266,7 +266,7 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
 	1. Authorization check              | v |
 	2. Validation for Deposit Amount    | v |
-	3. Lock objects to make synchronization ????
+	3. Lock objects to make synchronization ???? ------------------------------
 	*/
 	var body struct {
 		UserID int     `json:"user_id"`
