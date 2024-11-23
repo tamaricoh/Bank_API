@@ -1,20 +1,24 @@
 package api_sec
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var accountMutex sync.Mutex 
 
-var jwtKey = []byte("my_secret_key")
+var jwtKey = []byte("sodi")
 
 type Claims struct {
 	Username string `json:"username"`
@@ -23,99 +27,77 @@ type Claims struct {
 	jwt.StandardClaims
 }
 
+type LogEntry struct {
+	Req Rec `json:"req"`
+	Rsp Rsp `json:"rsp"`
+}
+
+type Rec struct {
+	URL        string `json:"url"`
+	QSParams   string `json:"qs_params"`
+	Headers    string `json:"headers"`
+	ReqBodyLen int    `json:"req_body_len"`
+}
+
+type Rsp struct {
+	StatusClass string `json:"status_class"`
+	RspBodyLen  int    `json:"rsp_body_len"`
+}
+
+
 /*
-1. JWT Key Management                |   |
-2. Add input validation              | + | 
+1.  JWT Key Management                |   |
+2.  Add input validation              | + | 
 >>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
-3. HTTP Status Codes                 | v |
-4. Rate Limiting                     | ? |
-6. Hash the passwords                | v |
-7. Make the search more efficient    | v |
-8. SQL injection                     |   |
-9. Make sure to save this token for future requests    |   |
+3.  HTTP Status Codes                 | v |
+4.  Rate Limiting + Middleware        |   |
+6.  Hash the passwords                | v |
+7.  Make the search more efficient    | v |
+8.  SQL injection                     |   |
+9.  Require all necessary inputs and ensure they are not empty    |   |
+10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.                              |   |
 */
 
 /*
 README:
 1. ID Generation is simple, but accounts or users cannot be deleted.
 2. Improve the locking mechanism so that a lock by one user does not block other users.
+3. I would check if there are existing packages that perform the validations I wrote manually.
 */
-
-// Rate limiter ----------------------------------------------------------
-var rateLimitMutex sync.Mutex
-
-// Structure to store rate limit data for users
-type RateLimiter struct {
-	// Store user request counts and timestamps
-	UserRequests map[string]int
-	Timestamps   map[string]time.Time
-}
-
-// Global RateLimiter instance
-var rateLimiter = &RateLimiter{
-	UserRequests: make(map[string]int),
-	Timestamps:   make(map[string]time.Time),
-}
-
-// Max requests allowed per minute
-const maxRequestsPerMinute = 100
-
-func RateLimit(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rateLimitMutex.Lock()
-		defer rateLimitMutex.Unlock()
-
-		// Get user IP or identifier (You can use other identifiers like username or token for rate limiting)
-		userID := r.RemoteAddr
-
-		// Check if the timestamp for the user exists and is still valid (within the last minute)
-		if lastRequestTime, exists := rateLimiter.Timestamps[userID]; exists {
-			// If within the last minute, check the request count
-			if time.Since(lastRequestTime) < time.Minute {
-				// Check if the user exceeded the rate limit
-				if rateLimiter.UserRequests[userID] >= maxRequestsPerMinute {
-					http.Error(w, "Too many requests. Please try again later.", http.StatusTooManyRequests)
-					return
-				}
-			} else {
-				// Reset the rate limit count after a minute
-				rateLimiter.UserRequests[userID] = 0
-				rateLimiter.Timestamps[userID] = time.Now()
-			}
-		} else {
-			// If it's the user's first request, initialize the counters
-			rateLimiter.UserRequests[userID] = 0
-			rateLimiter.Timestamps[userID] = time.Now()
-		}
-
-		// Increment the request count for the user
-		rateLimiter.UserRequests[userID]++
-
-		// Pass the request to the next handler
-		next.ServeHTTP(w, r)
-	})
-}
-// Rate limiter ----------------------------------------------------------
 
 func Register(w http.ResponseWriter, r *http.Request) {
 	/*
-		1. Make the Username unique            | v |
-		2. Hash the passwords                  | v |
-		3. Exclude Password in Response        | v |
-		4. check if username != "" -------------------------------
+		1. Ensure username, password, and role are not empty      | v |
+		2. Make the Username unique                               | v |
+		3. Hash the passwords                                     | v |
+		4. Exclude Password in Response                           | v |
 	*/
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		logRequestAndResponse(r, http.StatusMethodNotAllowed)
 		return
 	}
 
 	var user User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
 		http.Error(w, "Invalid input", http.StatusBadRequest)
+		logRequestAndResponse(r, http.StatusBadRequest)
 		return
 	}
 
-	// Part 1: Check if username is unique
+	// Part 1:
+	if strings.TrimSpace(user.Username) == "" || strings.TrimSpace(user.Password) == "" {
+		http.Error(w, "Username and password must not be empty", http.StatusBadRequest)
+		logRequestAndResponse(r, http.StatusBadRequest)
+		return
+	}
+	
+	if (user.Role != "user" && user.Role != "admin") || strings.TrimSpace(user.Role) == "" {
+		http.Error(w, "Role must be 'user' or 'admin'", http.StatusBadRequest)
+		logRequestAndResponse(r, http.StatusBadRequest)
+		return
+	}
+	// Part 2:
 	userExists := false
 	for _, existingUser := range userMap {
 		if existingUser.Username == user.Username {
@@ -126,21 +108,23 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	
 	if userExists {
 		http.Error(w, "Username already exists", http.StatusConflict)
+		logRequestAndResponse(r, http.StatusConflict)
 		return
 	}
 
-	// Part 2: Hash the password
+	// Part 3:
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		logRequestAndResponse(r, http.StatusInternalServerError)
 		return
 	}
 	user.Password = string(hashedPassword)
 
-	user.ID = len(userMap) + 1 // Assuming the IDs are sequential, you can compute it from the map size.
+	user.ID = len(userMap) + 1 
 	userMap[user.ID] = user
 
-	// Part 3: Exclude the password from the response
+	// Part 4:
 	responseUser := struct {
 		ID       int    `json:"id"`
 		Username string `json:"username"`
@@ -150,13 +134,14 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		Username: user.Username,
 		Role:     user.Role,
 	}
-
+	logRequestAndResponse(r, http.StatusOK)
 	json.NewEncoder(w).Encode(responseUser)
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
 	/*
-	1. Remove the direct Password comparison        | v |
+	1. Ensure username and password are not empty      | v |
+	2. Remove the direct Password comparison           | v |
 	*/
 	if r.Method != http.MethodPost { 
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -168,11 +153,17 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Part 1:
+	if strings.TrimSpace(creds.Username) == "" || strings.TrimSpace(creds.Password) == "" {
+		http.Error(w, "Username and password must not be empty", http.StatusBadRequest)
+		return
+	}
+
 	// Authenticate user
 	var authenticatedUser *User
 	for _, user := range userMap {
 		if user.Username == creds.Username {
-			// Part 1:
+			// Part 2:
 			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err == nil {
 				authenticatedUser = &user
 				break
@@ -190,12 +181,14 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	claims := &Claims{
 		Username: authenticatedUser.Username,
 		Role:     authenticatedUser.Role,
+		UserID:   authenticatedUser.ID,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expirationTime.Unix(),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(jwtKey)
+	log.Println("Generated Token:", tokenString)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -212,7 +205,7 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	*/
 	if r.Method == http.MethodPost {
 		if claims.Role != "admin" {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
+			http.Error(w, "Unauthorized1", http.StatusForbidden)
 			return
 		}
 		createAccount(w, r, claims)
@@ -221,7 +214,7 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	if r.Method == http.MethodGet {
 		// Part 1:
 		if claims.Role != "admin" {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
+			http.Error(w, "Unauthorized2", http.StatusForbidden)
 			return
 		}
 		listAccounts(w, r, claims)
@@ -240,7 +233,7 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 1:
 	if claims.Role != "admin" {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		http.Error(w, "Unauthorized3", http.StatusForbidden)
 		return
 	}
 
@@ -285,7 +278,7 @@ func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 2:
 	if claims.Role != "admin" {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		http.Error(w, "Unauthorized4", http.StatusForbidden)
 		return
 	}
 
@@ -337,7 +330,7 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 2:
 	if claims.Role != "admin" && claims.UserID != uid {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		http.Error(w, "Unauthorized5", http.StatusForbidden)
 		return
 	}
 	if acc, exists := accountMap[uid]; exists {
@@ -360,7 +353,7 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	
 	// Part 1:
 	if claims.UserID != body.UserID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		http.Error(w, "Unauthorized6", http.StatusForbidden)
 		return
 	}
 
@@ -381,8 +374,8 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	if acc, exists := accountMap[body.UserID]; exists {
 		acc.Balance += body.Amount
-		accountMap[body.UserID] = acc  // Update the account in the map
-		json.NewEncoder(w).Encode(acc) // Return the updated account
+		accountMap[body.UserID] = acc
+		json.NewEncoder(w).Encode(acc)
 		return
 	}
 	http.Error(w, "Account not found", http.StatusNotFound)
@@ -401,7 +394,7 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 1:
 	if claims.UserID != body.UserID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		http.Error(w, "Unauthorized7", http.StatusForbidden)
 		return
 	}
 
@@ -426,8 +419,8 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 			return
 		}
 		acc.Balance -= body.Amount
-		accountMap[body.UserID] = acc // Update the account in the map
-		json.NewEncoder(w).Encode(acc) // Return the updated account
+		accountMap[body.UserID] = acc
+		json.NewEncoder(w).Encode(acc)
 		return
 	}
 	http.Error(w, "Account not found", http.StatusNotFound)
@@ -447,9 +440,57 @@ func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFu
 			return jwtKey, nil
 		})
 		if err != nil || !token.Valid {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			http.Error(w, "Unauthorized8", http.StatusUnauthorized)
 			return
 		}
 		next(w, r, claims)
+	}
+}
+
+func logRequestAndResponse(r *http.Request, statusCode int) {
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Rewind the body for the handler
+
+	loggingReq := &Rec{
+		URL:        r.URL.String(),
+		QSParams:   r.URL.RawQuery,
+		Headers:    formatHeaders(r.Header),
+		ReqBodyLen: len(bodyBytes),
+	}
+
+	loggingRsp := &Rsp{
+		StatusClass: determineStatusClass(statusCode),
+		RspBodyLen:  1024, // Example response body length, can be updated later
+	}
+
+	logging := &LogEntry{
+		Req: *loggingReq,
+		Rsp: *loggingRsp,
+	}
+
+	logData, _ := json.Marshal(logging)
+	log.Println(string(logData))
+}
+func formatHeaders(headers http.Header) string {
+	var headerStrings []string
+	for k, v := range headers {
+		headerStrings = append(headerStrings, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+	}
+	return strings.Join(headerStrings, "; ")
+}
+
+func determineStatusClass(statusCode int) string {
+	switch {
+	case statusCode >= 200 && statusCode < 300:
+		return "2xx"
+	case statusCode >= 300 && statusCode < 400:
+		return "3xx"
+	case statusCode >= 400 && statusCode < 500:
+		return "4xx"
+	case statusCode >= 500:
+		return "5xx"
+	default:
+		return "unknown"
 	}
 }
