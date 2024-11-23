@@ -1,10 +1,8 @@
 package api_sec
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -55,7 +53,7 @@ type Rsp struct {
 7.  Make the search more efficient    | v |
 8.  SQL injection                     |   |
 9.  Require all necessary inputs and ensure they are not empty    |   |
-10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.                              |   |
+10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
 */
 
 /*
@@ -73,28 +71,24 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		4. Exclude Password in Response                           | v |
 	*/
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		logRequestAndResponse(r, http.StatusMethodNotAllowed)
+		handleError(w, r, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var user User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		logRequestAndResponse(r, http.StatusBadRequest)
+		handleError(w, r, "Invalid input", http.StatusBadRequest)
 		return
 	}
 
 	// Part 1:
 	if strings.TrimSpace(user.Username) == "" || strings.TrimSpace(user.Password) == "" {
-		http.Error(w, "Username and password must not be empty", http.StatusBadRequest)
-		logRequestAndResponse(r, http.StatusBadRequest)
+		handleError(w, r, "Username and password must not be empty", http.StatusBadRequest)
 		return
 	}
 	
 	if (user.Role != "user" && user.Role != "admin") || strings.TrimSpace(user.Role) == "" {
-		http.Error(w, "Role must be 'user' or 'admin'", http.StatusBadRequest)
-		logRequestAndResponse(r, http.StatusBadRequest)
+		handleError(w, r, "Role must be 'user' or 'admin'", http.StatusBadRequest)
 		return
 	}
 	// Part 2:
@@ -107,16 +101,14 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	if userExists {
-		http.Error(w, "Username already exists", http.StatusConflict)
-		logRequestAndResponse(r, http.StatusConflict)
+		handleError(w, r, "Username already exists", http.StatusConflict)
 		return
 	}
 
 	// Part 3:
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		logRequestAndResponse(r, http.StatusInternalServerError)
+		handleError(w, r, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	user.Password = string(hashedPassword)
@@ -125,7 +117,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	userMap[user.ID] = user
 
 	// Part 4:
-	responseUser := struct {
+	response := struct {
 		ID       int    `json:"id"`
 		Username string `json:"username"`
 		Role     string `json:"role"`
@@ -134,8 +126,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		Username: user.Username,
 		Role:     user.Role,
 	}
-	logRequestAndResponse(r, http.StatusOK)
-	json.NewEncoder(w).Encode(responseUser)
+
+	writeAndLogResponse(w, r, http.StatusOK, response)
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
@@ -144,18 +136,18 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	2. Remove the direct Password comparison           | v |
 	*/
 	if r.Method != http.MethodPost { 
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		handleError(w, r, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var creds User
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		handleError(w, r, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Part 1:
 	if strings.TrimSpace(creds.Username) == "" || strings.TrimSpace(creds.Password) == "" {
-		http.Error(w, "Username and password must not be empty", http.StatusBadRequest)
+		handleError(w, r, "Username and password must not be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -173,7 +165,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// If user doesn't exist or password is incorrect
 	if authenticatedUser == nil {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		handleError(w, r, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
@@ -188,13 +180,13 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(jwtKey)
-	log.Println("Generated Token:", tokenString)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		handleError(w, r, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"token": tokenString})
+	response := map[string]string{"token": tokenString}
+	writeAndLogResponse(w, r, http.StatusOK, response)
 
 }
 
@@ -205,7 +197,7 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	*/
 	if r.Method == http.MethodPost {
 		if claims.Role != "admin" {
-			http.Error(w, "Unauthorized1", http.StatusForbidden)
+			handleError(w, r, "Unauthorized", http.StatusForbidden)
 			return
 		}
 		createAccount(w, r, claims)
@@ -214,14 +206,15 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	if r.Method == http.MethodGet {
 		// Part 1:
 		if claims.Role != "admin" {
-			http.Error(w, "Unauthorized2", http.StatusForbidden)
+			handleError(w, r, "Unauthorized", http.StatusForbidden)
 			return
 		}
 		listAccounts(w, r, claims)
 		return
 	}
 	// Part 2:
-	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	errorMsg := "Method Not Allowed"
+	handleError(w, r, errorMsg, http.StatusMethodNotAllowed)
 }
 
 func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -233,25 +226,25 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 1:
 	if claims.Role != "admin" {
-		http.Error(w, "Unauthorized3", http.StatusForbidden)
+		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
 	var acc Account
 	if err := json.NewDecoder(r.Body).Decode(&acc); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		handleError(w, r, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Part 2:
 	if acc.UserID <= 0 {
-		http.Error(w, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
+		handleError(w, r, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
 		return
 	}
 
 	// Part 3:
 	if _, exists := accountMap[acc.UserID]; exists {
-		http.Error(w, "Account already exists for this UserID", http.StatusConflict)
+		handleError(w, r, "Account already exists for this UserID", http.StatusConflict)
 		return
 	}
 
@@ -259,8 +252,7 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	acc.CreatedAt = time.Now()
 	accountMap[acc.ID] = acc
 
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(acc)   
+	writeAndLogResponse(w, r, http.StatusCreated, acc) //------------------------------
 }
 
 func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -272,19 +264,19 @@ func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 1:
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		handleError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Part 2:
 	if claims.Role != "admin" {
-		http.Error(w, "Unauthorized4", http.StatusForbidden)
+		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
 	// Part 3:
 	if len(accountMap) == 0 {
-		http.Error(w, "No accounts found", http.StatusNotFound)
+		handleError(w, r, "No accounts found", http.StatusNotFound)
 		return
 	}
 	var allAccounts []Account
@@ -292,8 +284,7 @@ func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
     	allAccounts = append(allAccounts, acc)
 	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(allAccounts)
+	writeAndLogResponse(w, r, http.StatusOK, allAccounts)
 }
 
 func BalanceHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -309,7 +300,7 @@ func BalanceHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		withdrawBalance(w, r, claims)
 	// Part 1:
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		handleError(w, r, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -324,20 +315,23 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	
 	// Part 1:
 	if err != nil {
-		http.Error(w, "Invalid user_id", http.StatusBadRequest)
+		handleError(w, r, "Invalid user_id", http.StatusBadRequest)
 		return
 	}
 
 	// Part 2:
 	if claims.Role != "admin" && claims.UserID != uid {
-		http.Error(w, "Unauthorized5", http.StatusForbidden)
+		handleError(w, r, "Unauthorized5", http.StatusForbidden)
 		return
 	}
+
 	if acc, exists := accountMap[uid]; exists {
-		json.NewEncoder(w).Encode(map[string]float64{"balance": acc.Balance})
+		responseBody := map[string]float64{"balance": acc.Balance}
+	
+		writeAndLogResponse(w, r, http.StatusOK, responseBody,)
 		return
 	}
-	http.Error(w, "Account not found", http.StatusNotFound)
+	handleError(w, r, "Account not found", http.StatusNotFound)
 }
 
 func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -353,18 +347,18 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	
 	// Part 1:
 	if claims.UserID != body.UserID {
-		http.Error(w, "Unauthorized6", http.StatusForbidden)
+		handleError(w, r, "Unauthorized6", http.StatusForbidden)
 		return
 	}
 
 	// Part 2:
 	if body.Amount <= 0 {
-		http.Error(w, "Amount must be greater than zero", http.StatusBadRequest)
+		handleError(w, r, "Amount must be greater than zero", http.StatusBadRequest)
 		return
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		handleError(w, r, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -375,10 +369,11 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	if acc, exists := accountMap[body.UserID]; exists {
 		acc.Balance += body.Amount
 		accountMap[body.UserID] = acc
-		json.NewEncoder(w).Encode(acc)
+		responseBody := acc
+		writeAndLogResponse(w, r, http.StatusOK, responseBody)
 		return
 	}
-	http.Error(w, "Account not found", http.StatusNotFound)
+	handleError(w, r, "Account not found", http.StatusNotFound)
 }
 
 func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -394,18 +389,18 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 1:
 	if claims.UserID != body.UserID {
-		http.Error(w, "Unauthorized7", http.StatusForbidden)
+		handleError(w, r, "Unauthorized7", http.StatusForbidden)
 		return
 	}
 
 	// Part 2:
 	if body.Amount <= 0 {
-		http.Error(w, "Amount must be greater than zero", http.StatusBadRequest)
+		handleError(w, r, "Amount must be greater than zero", http.StatusBadRequest)
 		return
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		handleError(w, r, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -415,15 +410,18 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	if acc, exists := accountMap[body.UserID]; exists {
 		if acc.Balance < body.Amount {
-			http.Error(w, ErrInsufficientFunds.Error(), http.StatusBadRequest)
+			handleError(w, r, ErrInsufficientFunds.Error(), http.StatusBadRequest)
 			return
 		}
+	
 		acc.Balance -= body.Amount
 		accountMap[body.UserID] = acc
-		json.NewEncoder(w).Encode(acc)
+	
+		writeAndLogResponse(w, r, http.StatusOK, acc)
 		return
 	}
-	http.Error(w, "Account not found", http.StatusNotFound)
+	
+	handleError(w, r, "Account not found", http.StatusNotFound)
 	
 }
 
@@ -431,7 +429,7 @@ func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFu
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenStr := r.Header.Get("Authorization")
 		if tokenStr == "" {
-			http.Error(w, "Missing token", http.StatusUnauthorized)
+			handleError(w, r, "Missing token", http.StatusUnauthorized)
 			return
 		}
 		tokenStr = strings.TrimPrefix(tokenStr, "Bearer ")
@@ -439,29 +437,28 @@ func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFu
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
 			return jwtKey, nil
 		})
+
 		if err != nil || !token.Valid {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			http.Error(w, "Unauthorized8", http.StatusUnauthorized)
+			handleError(w, r, err.Error(), http.StatusUnauthorized)
+			handleError(w, r, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r, claims)
 	}
 }
 
-func logRequestAndResponse(r *http.Request, statusCode int) {
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Rewind the body for the handler
+func logRequestAndResponse(r *http.Request, statusCode int, rspLen int) { 
 
 	loggingReq := &Rec{
 		URL:        r.URL.String(),
 		QSParams:   r.URL.RawQuery,
 		Headers:    formatHeaders(r.Header),
-		ReqBodyLen: len(bodyBytes),
+		ReqBodyLen: int(r.ContentLength),
 	}
 
 	loggingRsp := &Rsp{
 		StatusClass: determineStatusClass(statusCode),
-		RspBodyLen:  1024, // Example response body length, can be updated later
+		RspBodyLen:  rspLen,
 	}
 
 	logging := &LogEntry{
@@ -472,6 +469,7 @@ func logRequestAndResponse(r *http.Request, statusCode int) {
 	logData, _ := json.Marshal(logging)
 	log.Println(string(logData))
 }
+
 func formatHeaders(headers http.Header) string {
 	var headerStrings []string
 	for k, v := range headers {
@@ -493,4 +491,25 @@ func determineStatusClass(statusCode int) string {
 	default:
 		return "unknown"
 	}
+}
+
+func writeAndLogResponse(w http.ResponseWriter, r *http.Request, statusCode int, responseData interface{}) {
+    // Marshal the response data into JSON
+    responseBody, err := json.Marshal(responseData)
+    if err != nil {
+        handleError(w, r, "Internal Server Error", http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(statusCode)
+    w.Write(responseBody)
+
+    responseBodyLength := len(responseBody)
+
+    logRequestAndResponse(r, statusCode, responseBodyLength)
+}
+
+func handleError(w http.ResponseWriter, r *http.Request, errorMsg string, statusCode int) {
+	http.Error(w, errorMsg, statusCode) 
+	logRequestAndResponse(r, statusCode, len(errorMsg)) 
 }
