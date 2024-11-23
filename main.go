@@ -31,9 +31,10 @@ func main() {
 	})
 
 	// Define your routes
-	http.HandleFunc("/register", api_sec.Register)                    // works
-	http.HandleFunc("/login", api_sec.Login)                          // works
-	http.Handle("/accounts", api_sec.Auth(api_sec.AccountsHandler))   // Unauthorized8
+	http.HandleFunc("/register", api_sec.Register)                    
+	http.HandleFunc("/login", api_sec.Login)                          
+	http.HandleFunc("/getusers", api_sec.Auth(api_sec.GetUsers))                          
+	http.Handle("/accounts", api_sec.Auth(api_sec.AccountsHandler))   
 	http.Handle("/balance", api_sec.Auth(api_sec.BalanceHandler))
 
 	// Start the server

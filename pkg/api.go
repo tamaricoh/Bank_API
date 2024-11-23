@@ -44,8 +44,8 @@ type Rsp struct {
 
 
 /*
-1.  JWT Key Management                |   |
-2.  Add input validation              | + | 
+1.  JWT Key Management                | v |
+2.  Add input validation              |   | 
 >>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
 3.  HTTP Status Codes                 | v |
 4.  Rate Limiting + Middleware        |   |
@@ -54,6 +54,9 @@ type Rsp struct {
 8.  SQL injection                     |   |
 9.  Require all necessary inputs and ensure they are not empty    |   |
 10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
+11. Everyone can register as an admin
+12. No logout implementation
+13. We can login several times
 */
 
 /*
@@ -61,6 +64,7 @@ README:
 1. ID Generation is simple, but accounts or users cannot be deleted.
 2. Improve the locking mechanism so that a lock by one user does not block other users.
 3. I would check if there are existing packages that perform the validations I wrote manually.
+4. 
 */
 
 func Register(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +193,31 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	writeAndLogResponse(w, r, http.StatusOK, response)
 
 }
+func GetUsers(w http.ResponseWriter, r *http.Request, claims *Claims) {
+	if r.Method != http.MethodGet {
+		handleError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if claims.Role != "admin" {
+		handleError(w, r, "Unauthorized", http.StatusForbidden)
+		return
+	}
+
+	if len(userMap) == 0 {
+		handleError(w, r, "No users found", http.StatusNotFound)
+		return
+	}
+
+	var allUsers []User
+	for _, user := range userMap {
+		userCopy := user
+		userCopy.Password = "" 
+		allUsers = append(allUsers, userCopy)
+	}
+
+	writeAndLogResponse(w, r, http.StatusOK, allUsers)
+}
 
 func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
@@ -237,8 +266,8 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	}
 
 	// Part 2:
-	if acc.UserID <= 0 {
-		handleError(w, r, "Invalid UserID: must be greater than 0", http.StatusBadRequest)
+	if acc.UserID <= 0 || acc.UserID > len(userMap) {
+		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
 	}
 
@@ -252,7 +281,7 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	acc.CreatedAt = time.Now()
 	accountMap[acc.ID] = acc
 
-	writeAndLogResponse(w, r, http.StatusCreated, acc) //------------------------------
+	writeAndLogResponse(w, r, http.StatusCreated, acc) 
 }
 
 func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
@@ -321,7 +350,7 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 	// Part 2:
 	if claims.Role != "admin" && claims.UserID != uid {
-		handleError(w, r, "Unauthorized5", http.StatusForbidden)
+		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
@@ -336,29 +365,35 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
-	1. Authorization check                    | v |
-	2. Validation for Deposit Amount          | v |
-	3. Lock objects to make synchronization   | v |
+	1. Validation for Deposit Amount            | v |
+	2. Authorization check                      | v |
+	3. Lock objects to make synchronization     | v |
+
 	*/
 	var body struct {
 		UserID int     `json:"user_id"`
 		Amount float64 `json:"amount"`
 	}
-	
-	// Part 1:
-	if claims.UserID != body.UserID {
-		handleError(w, r, "Unauthorized6", http.StatusForbidden)
-		return
-	}
-
-	// Part 2:
-	if body.Amount <= 0 {
-		handleError(w, r, "Amount must be greater than zero", http.StatusBadRequest)
-		return
-	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		handleError(w, r, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Part 1:
+	if body.UserID <= 0 || body.UserID > len(userMap) {
+		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
+		return
+	}
+	
+	if body.Amount <= 0 {
+		handleError(w, r, "Amount must be greater than zero", http.StatusBadRequest)
+		return
+	}	
+
+	// Part 2:
+	if claims.UserID != body.UserID {
+		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
@@ -378,8 +413,8 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 
 func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
-	1. Authorization check                      | v |
-	2. Validation for Withdrawal Amount         | v |
+	1. Validation for Withdrawal Amount         | v |
+	2. Authorization check                      | v |
 	3. Lock objects to make synchronization     | v |
 	*/
 	var body struct {
@@ -387,22 +422,29 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		Amount float64 `json:"amount"`
 	}
 
-	// Part 1:
-	if claims.UserID != body.UserID {
-		handleError(w, r, "Unauthorized7", http.StatusForbidden)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		handleError(w, r, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Part 2:
+	// Part 1:
+	if body.UserID <= 0 || body.UserID > len(userMap) {
+		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
+		return
+	}
+	
 	if body.Amount <= 0 {
 		handleError(w, r, "Amount must be greater than zero", http.StatusBadRequest)
 		return
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		handleError(w, r, err.Error(), http.StatusBadRequest)
+	// Part 2:
+	if claims.UserID != body.UserID {
+		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
 	}
+
+	
 
 	// Part 3:
 	accountMutex.Lock()
@@ -433,13 +475,13 @@ func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFu
 			return
 		}
 		tokenStr = strings.TrimPrefix(tokenStr, "Bearer ")
+		
 		claims := &Claims{}
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
 			return jwtKey, nil
 		})
 
 		if err != nil || !token.Valid {
-			handleError(w, r, err.Error(), http.StatusUnauthorized)
 			handleError(w, r, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
