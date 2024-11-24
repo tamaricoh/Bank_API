@@ -79,19 +79,7 @@ Below are the main changes implemented in the `api.go` file to enhance security 
 
 ---
 
-### 6. Implemented Locking Mechanism for Deposit Operations
-
-- **Problem**: Concurrent deposit operations on the same account could lead to inconsistent balance updates.
-- **Solution**: Added a locking mechanism to ensure only one deposit operation can be processed at a time on the same account:
-
-```go
-    accountMutex.Lock()
-	defer accountMutex.Unlock()
-```
-
----
-
-### 7. Efficient User and Account Search with Map
+### 6. Efficient User and Account Search with Map
 
 ### Changes Made
 
@@ -124,7 +112,7 @@ if _, exists := users[user.Username]; exists {
 
 1. **Generate a more complex ID:** The current ID generation method is too straightforward and needs to be improved for better uniqueness and security.
 
-2. **Improve locking mechanism:** The current locking system allows one user's lock to block others. This needs to be refined to prevent such conflicts and ensure better concurrency.
+2. **Adding Locking Mechanism:** If the server becomes multithreaded in the future, the lack of locking could cause race conditions and inconsistent account balances. Implementing locking will ensure safe and consistent resource handling.
 
 3. **Refactor validation logic:** Manually written validations should be replaced with existing packages that provide these checks in a more efficient and standardized way.
 

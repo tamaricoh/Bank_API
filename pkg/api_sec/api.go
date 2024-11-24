@@ -7,14 +7,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"golang.org/x/crypto/bcrypt"
-)
-
-var accountMutex sync.Mutex 
+) 
 
 var jwtKey = []byte("sodi")
 
@@ -379,9 +376,8 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
 	1. Validation for Deposit Amount            | v |
 	2. Authorization check                      | v |
-	3. Lock objects to make synchronization     | v |
-
 	*/
+
 	var body struct {
 		UserID int     `json:"user_id"`
 		Amount float64 `json:"amount"`
@@ -409,10 +405,6 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	// Part 3:
-	accountMutex.Lock()
-	defer accountMutex.Unlock()
-
 	if acc, exists := accounts[body.UserID]; exists {
 		acc.Balance += body.Amount
 		accounts[body.UserID] = acc
@@ -427,8 +419,8 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	/*
 	1. Validation for Withdrawal Amount         | v |
 	2. Authorization check                      | v |
-	3. Lock objects to make synchronization     | v |
 	*/
+
 	var body struct {
 		UserID int     `json:"user_id"`
 		Amount float64 `json:"amount"`
@@ -456,12 +448,6 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	
-
-	// Part 3:
-	accountMutex.Lock()
-	defer accountMutex.Unlock()
-
 	if acc, exists := accounts[body.UserID]; exists {
 		if acc.Balance < body.Amount {
 			handleError(w, r, ErrInsufficientFunds.Error(), http.StatusBadRequest)
@@ -476,7 +462,6 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	}
 	
 	handleError(w, r, "Account not found", http.StatusNotFound)
-	
 }
 
 func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFunc {
