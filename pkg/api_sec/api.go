@@ -60,15 +60,14 @@ type Rsp struct {
 2.  Add input validation              | v | 
 >>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
 3.  HTTP Status Codes                 | v |
-4.  Rate Limiting                     |   | -------------------
-6.  Hash the passwords                | v |
-7.  Make the search more efficient    | v |
-8.  SQL injection                     | v |
-9.  Require all necessary inputs and ensure they are not empty    | v |
-10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
-11. Everyone can register as an admin
-12. No logout implementation
-13. We can login several times
+4.    Hash the passwords                | v |
+5.  Make the search more efficient    | v |
+6.  SQL injection                     | v |
+7.  Require all necessary inputs and ensure they are not empty    | v |
+8.  The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
+9. Everyone can register as an admin
+10. No logout implementation
+11. We can login several times
 */
 
 /*
