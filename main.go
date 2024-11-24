@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	api_sec "github.com/tamaricoh/F5_home_assignment/pkg" // Import your api_sec package
+	"github.com/tamaricoh/F5_home_assignment/pkg/api_sec"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -16,11 +16,12 @@ func main() {
 	timestamp := time.Now().Format("20060102150405") // Adding a timestamp to the filename to differentiate between files and avoid overwriting
 	logFilename := fmt.Sprintf("log%s.log", timestamp)
 	logfile, errLog := os.OpenFile(logFilename, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
-	defer logfile.Close()
-
+	
 	if errLog != nil {
 		log.Fatalf("Failed to open log file: %v", errLog)
 	}
+
+	defer logfile.Close()
 
 	log.SetOutput(&lumberjack.Logger{
 		Filename:   logFilename,
