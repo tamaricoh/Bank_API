@@ -21,20 +21,23 @@ var jwtKey = []byte("sodi")
 type Claims struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
-	UserID   int    `json:"user_id"` // For the getBalance Authorization check
+	UserID   int    `json:"user_id"`
 	jwt.StandardClaims
 }
 
 type LogEntry struct {
-	Req Rec `json:"req"`
+	Timestamp  string `json:"timestamp"`
+	Req Req `json:"req"`
 	Rsp Rsp `json:"rsp"`
 }
 
-type Rec struct {
+type Req struct {
+    Method     string `json:"method"`
 	URL        string `json:"url"`
 	QSParams   string `json:"qs_params"`
 	Headers    string `json:"headers"`
 	ReqBodyLen int    `json:"req_body_len"`
+	// UserID     int    `json:"user_id"`
 }
 
 type Rsp struct {
@@ -52,7 +55,7 @@ type Rsp struct {
 6.  Hash the passwords                | v |
 7.  Make the search more efficient    | v |
 8.  SQL injection                     |   |
-9.  Require all necessary inputs and ensure they are not empty    |   |
+9.  Require all necessary inputs and ensure they are not empty    | v |
 10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
 11. Everyone can register as an admin
 12. No logout implementation
@@ -385,7 +388,7 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
 	}
-	
+
 	if body.Amount <= 0 {
 		handleError(w, r, "Amount must be greater than zero", http.StatusBadRequest)
 		return
@@ -491,7 +494,8 @@ func Auth(next func(http.ResponseWriter, *http.Request, *Claims)) http.HandlerFu
 
 func logRequestAndResponse(r *http.Request, statusCode int, rspLen int) { 
 
-	loggingReq := &Rec{
+	loggingReq := &Req{
+		Method: 	r.Method,
 		URL:        r.URL.String(),
 		QSParams:   r.URL.RawQuery,
 		Headers:    formatHeaders(r.Header),
@@ -504,6 +508,7 @@ func logRequestAndResponse(r *http.Request, statusCode int, rspLen int) {
 	}
 
 	logging := &LogEntry{
+		Timestamp: time.Now().Format("20060102150405"), // Adding a timestamp
 		Req: *loggingReq,
 		Rsp: *loggingRsp,
 	}
