@@ -56,7 +56,7 @@ type Rsp struct {
 
 
 /*
-1.  JWT Key Management                | v |
+1.  JWT Key Management problem :(     | v |
 2.  Add input validation              | v | 
 >>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
 3.  HTTP Status Codes                 | v |
@@ -71,7 +71,6 @@ type Rsp struct {
 */
 
 /*
-README:
 1. ID Generation is simple, but accounts or users cannot be deleted.
 2. Improve the locking mechanism so that a lock by one user does not block other users.
 3. I would check if there are existing packages that perform the validations I wrote manually.
