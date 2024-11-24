@@ -57,13 +57,13 @@ type Rsp struct {
 
 /*
 1.  JWT Key Management                | v |
-2.  Add input validation              |   | 
+2.  Add input validation              | v | 
 >>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
 3.  HTTP Status Codes                 | v |
-4.  Rate Limiting + Middleware        |   |
+4.  Rate Limiting                     |   | -------------------
 6.  Hash the passwords                | v |
 7.  Make the search more efficient    | v |
-8.  SQL injection                     |   |
+8.  SQL injection                     | v |
 9.  Require all necessary inputs and ensure they are not empty    | v |
 10. The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
 11. Everyone can register as an admin
@@ -94,6 +94,16 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	var user User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
 		handleError(w, r, "Invalid input", http.StatusBadRequest)
+		return
+	}
+
+	if len(user.Username) > 16 {
+		handleError(w, r, "Username must not be longer than 16 characters", http.StatusBadRequest)
+		return
+	}
+
+	if len(user.Password) > 16 {
+		handleError(w, r, "Password must not be longer than 16 characters", http.StatusBadRequest)
 		return
 	}
 
