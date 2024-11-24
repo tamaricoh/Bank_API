@@ -19,8 +19,6 @@ type Account struct {
 	CreatedAt time.Time
 }
 
-// var users []User
-// var accounts []Account
 var users = make(map[string]User)
 var accounts = make(map[int]Account)
 
