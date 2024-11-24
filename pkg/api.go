@@ -18,6 +18,13 @@ var accountMutex sync.Mutex
 
 var jwtKey = []byte("sodi")
 
+type Role string
+
+const (
+	AdminRole   Role = "admin"
+	UserRole 	Role = "user"
+)
+
 type Claims struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
@@ -37,10 +44,12 @@ type Req struct {
 	QSParams   string `json:"qs_params"`
 	Headers    string `json:"headers"`
 	ReqBodyLen int    `json:"req_body_len"`
+	Role       Role   `json:"role"` // Role is an enum-like field
 	// UserID     int    `json:"user_id"`
 }
 
 type Rsp struct {
+	StatusCode   int   `json:"status_code"`
 	StatusClass string `json:"status_class"`
 	RspBodyLen  int    `json:"rsp_body_len"`
 }
@@ -67,7 +76,7 @@ README:
 1. ID Generation is simple, but accounts or users cannot be deleted.
 2. Improve the locking mechanism so that a lock by one user does not block other users.
 3. I would check if there are existing packages that perform the validations I wrote manually.
-4. 
+4. Everyone can register as an admin
 */
 
 func Register(w http.ResponseWriter, r *http.Request) {
@@ -94,20 +103,12 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	if (user.Role != "user" && user.Role != "admin") || strings.TrimSpace(user.Role) == "" {
+	if (user.Role != string(UserRole) && user.Role != string(AdminRole)) || strings.TrimSpace(user.Role) == "" {
 		handleError(w, r, "Role must be 'user' or 'admin'", http.StatusBadRequest)
 		return
 	}
 	// Part 2:
-	userExists := false
-	for _, existingUser := range userMap {
-		if existingUser.Username == user.Username {
-			userExists = true
-			break
-		}
-	}
-	
-	if userExists {
+	if _, exists := users[user.Username]; exists {
 		handleError(w, r, "Username already exists", http.StatusConflict)
 		return
 	}
@@ -120,8 +121,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 	user.Password = string(hashedPassword)
 
-	user.ID = len(userMap) + 1 
-	userMap[user.ID] = user
+	user.ID = len(users) + 1 
+	users[user.Username] = user
 
 	// Part 4:
 	response := struct {
@@ -160,7 +161,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// Authenticate user
 	var authenticatedUser *User
-	for _, user := range userMap {
+	for _, user := range users {
 		if user.Username == creds.Username {
 			// Part 2:
 			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err == nil {
@@ -207,13 +208,13 @@ func GetUsers(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	if len(userMap) == 0 {
+	if len(users) == 0 {
 		handleError(w, r, "No users found", http.StatusNotFound)
 		return
 	}
 
 	var allUsers []User
-	for _, user := range userMap {
+	for _, user := range users {
 		userCopy := user
 		userCopy.Password = "" 
 		allUsers = append(allUsers, userCopy)
@@ -269,20 +270,20 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	}
 
 	// Part 2:
-	if acc.UserID <= 0 || acc.UserID > len(userMap) {
+	if acc.UserID <= 0 || acc.UserID > len(users) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
 	}
 
 	// Part 3:
-	if _, exists := accountMap[acc.UserID]; exists {
+	if _, exists := accounts[acc.UserID]; exists {
 		handleError(w, r, "Account already exists for this UserID", http.StatusConflict)
 		return
 	}
 
-	acc.ID = len(accountMap) + 1
+	acc.ID = len(accounts) + 1
 	acc.CreatedAt = time.Now()
-	accountMap[acc.ID] = acc
+	accounts[acc.ID] = acc
 
 	writeAndLogResponse(w, r, http.StatusCreated, acc) 
 }
@@ -307,12 +308,12 @@ func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	}
 
 	// Part 3:
-	if len(accountMap) == 0 {
+	if len(accounts) == 0 {
 		handleError(w, r, "No accounts found", http.StatusNotFound)
 		return
 	}
 	var allAccounts []Account
-	for _, acc := range accountMap {
+	for _, acc := range accounts {
     	allAccounts = append(allAccounts, acc)
 	}
 
@@ -357,7 +358,7 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	if acc, exists := accountMap[uid]; exists {
+	if acc, exists := accounts[uid]; exists {
 		responseBody := map[string]float64{"balance": acc.Balance}
 	
 		writeAndLogResponse(w, r, http.StatusOK, responseBody,)
@@ -384,7 +385,7 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	}
 
 	// Part 1:
-	if body.UserID <= 0 || body.UserID > len(userMap) {
+	if body.UserID <= 0 || body.UserID > len(users) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
 	}
@@ -404,9 +405,9 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	accountMutex.Lock()
 	defer accountMutex.Unlock()
 
-	if acc, exists := accountMap[body.UserID]; exists {
+	if acc, exists := accounts[body.UserID]; exists {
 		acc.Balance += body.Amount
-		accountMap[body.UserID] = acc
+		accounts[body.UserID] = acc
 		responseBody := acc
 		writeAndLogResponse(w, r, http.StatusOK, responseBody)
 		return
@@ -431,7 +432,7 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	}
 
 	// Part 1:
-	if body.UserID <= 0 || body.UserID > len(userMap) {
+	if body.UserID <= 0 || body.UserID > len(users) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
 	}
@@ -453,14 +454,14 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 	accountMutex.Lock()
 	defer accountMutex.Unlock()
 
-	if acc, exists := accountMap[body.UserID]; exists {
+	if acc, exists := accounts[body.UserID]; exists {
 		if acc.Balance < body.Amount {
 			handleError(w, r, ErrInsufficientFunds.Error(), http.StatusBadRequest)
 			return
 		}
 	
 		acc.Balance -= body.Amount
-		accountMap[body.UserID] = acc
+		accounts[body.UserID] = acc
 	
 		writeAndLogResponse(w, r, http.StatusOK, acc)
 		return
@@ -503,6 +504,7 @@ func logRequestAndResponse(r *http.Request, statusCode int, rspLen int) {
 	}
 
 	loggingRsp := &Rsp{
+		StatusCode: statusCode,
 		StatusClass: determineStatusClass(statusCode),
 		RspBodyLen:  rspLen,
 	}
