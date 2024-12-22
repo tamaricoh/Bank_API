@@ -52,35 +52,7 @@ type Rsp struct {
 }
 
 
-/*
-1.  JWT Key Management problem :(     | v |
-2.  Add input validation              | v | 
->>> buffer overun - limit the length of usernames, passwords, and all user inputs in general.
-3.  HTTP Status Codes                 | v |
-4.  Hash the passwords                | v |
-5.  Make the search more efficient    | v |
-6.  SQL injection                     | v |
-7.  Require all necessary inputs and ensure they are not empty    | v |
-8.  The log is not calculating the length correctly, and I want to check if the parameters in it are correct.    | v |
-9.  Everyone can register as an admin
-10. No logout implementation
-11. We can login several times
-*/
-
-/*
-1. ID Generation is simple, but accounts or users cannot be deleted.
-2. Improve the locking mechanism so that a lock by one user does not block other users.
-3. I would check if there are existing packages that perform the validations I wrote manually.
-4. Everyone can register as an admin
-*/
-
 func Register(w http.ResponseWriter, r *http.Request) {
-	/*
-		1. Ensure username, password, and role are not empty      | v |
-		2. Make the Username unique                               | v |
-		3. Hash the passwords                                     | v |
-		4. Exclude Password in Response                           | v |
-	*/
 	if r.Method != http.MethodPost {
 		handleError(w, r, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -102,7 +74,6 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Part 1:
 	if strings.TrimSpace(user.Username) == "" || strings.TrimSpace(user.Password) == "" {
 		handleError(w, r, "Username and password must not be empty", http.StatusBadRequest)
 		return
@@ -112,13 +83,12 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, "Role must be 'user' or 'admin'", http.StatusBadRequest)
 		return
 	}
-	// Part 2:
+
 	if _, exists := users[user.Username]; exists {
 		handleError(w, r, "Username already exists", http.StatusConflict)
 		return
 	}
 
-	// Part 3:
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
 		handleError(w, r, "Internal Server Error", http.StatusInternalServerError)
@@ -129,7 +99,6 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	user.ID = len(users) + 1 
 	users[user.Username] = user
 
-	// Part 4:
 	response := struct {
 		ID       int    `json:"id"`
 		Username string `json:"username"`
@@ -144,10 +113,6 @@ func Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
-	/*
-	1. Ensure username and password are not empty      | v |
-	2. Remove the direct Password comparison           | v |
-	*/
 	if r.Method != http.MethodPost { 
 		handleError(w, r, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -158,17 +123,15 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Part 1:
 	if strings.TrimSpace(creds.Username) == "" || strings.TrimSpace(creds.Password) == "" {
 		handleError(w, r, "Username and password must not be empty", http.StatusBadRequest)
 		return
 	}
 
-	// Authenticate user
+
 	var authenticatedUser *User
 	for _, user := range users {
 		if user.Username == creds.Username {
-			// Part 2:
 			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err == nil {
 				authenticatedUser = &user
 				break
@@ -176,7 +139,6 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If user doesn't exist or password is incorrect
 	if authenticatedUser == nil {
 		handleError(w, r, "Invalid credentials", http.StatusUnauthorized)
 		return
@@ -229,10 +191,6 @@ func GetUsers(w http.ResponseWriter, r *http.Request, claims *Claims) {
 }
 
 func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Authorization check              | v |
-	2. Handle unsupported HTTP methods  | v |
-	*/
 	if r.Method == http.MethodPost {
 		if claims.Role != "admin" {
 			handleError(w, r, "Unauthorized", http.StatusForbidden)
@@ -242,7 +200,6 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		// Part 1:
 		if claims.Role != "admin" {
 			handleError(w, r, "Unauthorized", http.StatusForbidden)
 			return
@@ -250,19 +207,11 @@ func AccountsHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		listAccounts(w, r, claims)
 		return
 	}
-	// Part 2:
 	errorMsg := "Method Not Allowed"
 	handleError(w, r, errorMsg, http.StatusMethodNotAllowed)
 }
 
 func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Authorization check                    | v |
-	2. Error Handling for Invalid Data        | v |
-	3. Check if account already exists        | v |
-	*/
-
-	// Part 1:
 	if claims.Role != "admin" {
 		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
@@ -274,13 +223,11 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	// Part 2:
 	if acc.UserID <= 0 || acc.UserID > len(users) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
 	}
 
-	// Part 3:
 	if _, exists := accounts[acc.UserID]; exists {
 		handleError(w, r, "Account already exists for this UserID", http.StatusConflict)
 		return
@@ -294,25 +241,16 @@ func createAccount(w http.ResponseWriter, r *http.Request, claims *Claims) {
 }
 
 func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Ensure the HTTP method is GET          | v |
- 	2. Authorization check                    | v |
-	3. Error Handling for Empty accounts      | v |
-	*/
-
-	// Part 1:
 	if r.Method != http.MethodGet {
 		handleError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Part 2:
 	if claims.Role != "admin" {
 		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
-	// Part 3:
 	if len(accounts) == 0 {
 		handleError(w, r, "No accounts found", http.StatusNotFound)
 		return
@@ -326,9 +264,6 @@ func listAccounts(w http.ResponseWriter, r *http.Request, claims *Claims) {
 }
 
 func BalanceHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Missing Default Case for HTTP Methods
-	*/
 	switch r.Method {
 	case http.MethodGet:
 		getBalance(w, r, claims)
@@ -336,28 +271,21 @@ func BalanceHandler(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		depositBalance(w, r, claims)
 	case http.MethodDelete:
 		withdrawBalance(w, r, claims)
-	// Part 1:
 	default:
 		handleError(w, r, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Input Validation for user_id         | v |
-	2. Authorization check                  | v |
-	*/
 	
 	userId := r.URL.Query().Get("user_id")
 	uid, err := strconv.Atoi(userId)
 	
-	// Part 1:
 	if err != nil {
 		handleError(w, r, "Invalid user_id", http.StatusBadRequest)
 		return
 	}
 
-	// Part 2:
 	if claims.Role != "admin" && claims.UserID != uid {
 		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
@@ -373,10 +301,6 @@ func getBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 }
 
 func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Validation for Deposit Amount            | v |
-	2. Authorization check                      | v |
-	*/
 
 	var body struct {
 		UserID int     `json:"user_id"`
@@ -388,7 +312,6 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	// Part 1:
 	if body.UserID <= 0 || body.UserID > len(users) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
@@ -399,7 +322,6 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}	
 
-	// Part 2:
 	if claims.UserID != body.UserID {
 		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
@@ -416,10 +338,6 @@ func depositBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 }
 
 func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
-	/*
-	1. Validation for Withdrawal Amount         | v |
-	2. Authorization check                      | v |
-	*/
 
 	var body struct {
 		UserID int     `json:"user_id"`
@@ -431,7 +349,6 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	// Part 1:
 	if body.UserID <= 0 || body.UserID > len(users) {
 		handleError(w, r, "Invalid UserID", http.StatusBadRequest)
 		return
@@ -442,7 +359,6 @@ func withdrawBalance(w http.ResponseWriter, r *http.Request, claims *Claims) {
 		return
 	}
 
-	// Part 2:
 	if claims.UserID != body.UserID {
 		handleError(w, r, "Unauthorized", http.StatusForbidden)
 		return
@@ -522,13 +438,15 @@ func formatHeaders(headers http.Header) string {
 
 func determineStatusClass(statusCode int) string {
 	switch {
+	case statusCode >= 100 && statusCode < 200:
+		return "1xx"
 	case statusCode >= 200 && statusCode < 300:
 		return "2xx"
 	case statusCode >= 300 && statusCode < 400:
 		return "3xx"
 	case statusCode >= 400 && statusCode < 500:
 		return "4xx"
-	case statusCode >= 500:
+	case statusCode >= 500 && statusCode < 600:
 		return "5xx"
 	default:
 		return "unknown"
@@ -536,7 +454,6 @@ func determineStatusClass(statusCode int) string {
 }
 
 func writeAndLogResponse(w http.ResponseWriter, r *http.Request, statusCode int, responseData interface{}) {
-    // Marshal the response data into JSON
     responseBody, err := json.Marshal(responseData)
     if err != nil {
         handleError(w, r, "Internal Server Error", http.StatusInternalServerError)
